@@ -8,8 +8,11 @@ import sklearn
 import tempfile
 from typing import List, Dict, Any
 
+# ✅ FIX UNTUK MODEL LOAD ERROR: Memastikan modul ini dimuat sebelum joblib.load
+import sklearn.compose._column_transformer 
+
 # =========================================
-# HUGGINGFACE FILE LINKS – Ranzzz/prediksi
+# HUGGINGFACE FILE LINKS
 # =========================================
 HF_MODEL_URL = "https://huggingface.co/Ranzzz/prediksi/resolve/main/model.pkl"
 
@@ -132,10 +135,10 @@ def build_model_input(raw_row: Dict[str, Any], model_columns: List[str]) -> pd.D
 
 
 # =========================================
-# CHAT FUNCTION (REVISED FOR AUTOMATIC API KEY)
+# CHAT FUNCTION (REVISED FOR AUTOMATIC API KEY & FALLBACK)
 # =========================================
 def chat_reply(system_prompt, messages, api_key, provider="openai"):
-    # --- LOGIKA FALLBACK OTOMATIS JIKA API KEY KOSONG (karena tidak disetel di environment) ---
+    # --- LOGIKA FALLBACK OTOMATIS JIKA API KEY KOSONG ---
     if not api_key:
         last_pred_price = "belum ada"
         car_features = "tidak diketahui"
@@ -274,7 +277,6 @@ with right:
             system_prompt = "Kamu adalah AI yang menjelaskan prediksi mobil."
             
             # Tambahkan konteks prediksi ke system_prompt HANYA jika ada prediksi terakhir (untuk LLM asli)
-            # Fallback akan mengambil data langsung dari session_state
             if "last_pred" in st.session_state and api_key:
                 lp = st.session_state["last_pred"]
                 system_prompt += f"\nPrediksi terakhir: Rp {lp['price']:,.0f}. Fitur: {lp['input']}" 
@@ -285,7 +287,7 @@ with right:
             
             st.session_state.chat_history.append(("ai", reply))
             
-            # Ganti st.experimental_rerun() dengan st.rerun()
+            # ✅ FIX: Ganti st.experimental_rerun() dengan st.rerun()
             st.rerun()
 
 
@@ -293,4 +295,4 @@ with right:
 # FOOTER
 # =========================================
 st.markdown("---")
-st.caption("Aplikasi Prediksi Harga Mobil – Serly ✅ API Key diakses via Environment Variable")
+st.caption("Aplikasi Prediksi Harga Mobil – Serly ✅ Stabil dan Fungsional")
