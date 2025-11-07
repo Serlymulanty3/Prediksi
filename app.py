@@ -1,298 +1,255 @@
-import streamlit as st
-import pandas as pd
-import requests
+import os
 import json
 import joblib
+import pandas as pd
+import streamlit as st
+from typing import Dict, Any
+from dotenv import load_dotenv
 import os
-import sklearn 
-import tempfile
-from typing import List, Dict, Any
-
-# ✅ FIX UNTUK MODEL LOAD ERROR: Memastikan modul ini dimuat sebelum joblib.load
-import sklearn.compose._column_transformer 
+os.environ["GEMINI_API_KEY"] = "AIzaSyA50jHU6-rZzngv8wejAIsyX75GYRsYJY4"
 
 # =========================================
-# HUGGINGFACE FILE LINKS – Ranzzz/prediksi
+# FUNGSI CHAT AI (OpenAI & Gemini)
 # =========================================
-HF_MODEL_URL = "https://huggingface.co/Ranzzz/prediksi/resolve/main/model.pkl"
-
-# FIX: kedua file ini TIDAK ADA, jadi harus fallback
-HF_COLUMNS_URL = "https://huggingface.co/Ranzzz/prediksi/resolve/main/columns.json"
-HF_EXAMPLE_URL = "https://huggingface.co/Ranzzz/prediksi/resolve/main/example_features.json"
-
-
-# =========================================
-# DOWNLOAD FILE
-# =========================================
-def download_file_with_progress(url: str, dest_path: str, chunk_size: int = 32768, timeout: int = 30):
-    with st.spinner("📥 Mengunduh model dari HuggingFace..."):
-        resp = requests.get(url, stream=True, timeout=timeout)
-        resp.raise_for_status()
-        total = int(resp.headers.get("content-length", 0))
-        progress_bar = st.progress(0)
-
-        downloaded = 0
-        with open(dest_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=chunk_size):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    progress_bar.progress(min(int(downloaded / total * 100), 100))
-
-        progress_bar.empty()
-    return True
-
-
-# =========================================
-# MODEL LOADER (cached)
-# =========================================
-@st.cache_resource(show_spinner=False)
-def get_local_model_path(hf_url: str) -> str:
-    tmp_dir = tempfile.gettempdir()
-    filename = "model.pkl"
-    local_path = os.path.join(tmp_dir, filename)
-
-    # If already downloaded and valid
-    if os.path.exists(local_path) and os.path.getsize(local_path) > 1000:
-        return local_path
-
-    # Otherwise download
-    download_file_with_progress(hf_url, local_path)
-    return local_path
-
-
-@st.cache_resource(show_spinner=False)
-def load_model_from_hf(hf_url: str):
-    try:
-        local_path = get_local_model_path(hf_url)
-        return joblib.load(local_path)
-    except Exception as e:
-        raise RuntimeError(f"Load model gagal: {e}")
-
-
-# =========================================
-# JSON LOADER (with FIXED fallback)
-# =========================================
-@st.cache_data
-def load_json_url(url: str):
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except:
-        return None  # no warning spam
-
-
-# =========================================
-# FIX: fallback untuk columns.json & example.json
-# =========================================
-columns_json = load_json_url(HF_COLUMNS_URL)
-example_json = load_json_url(HF_EXAMPLE_URL)
-
-if not columns_json:
-    # fallback: biarkan pipeline pakai raw dataframe
-    columns_json = None
-
-if not example_json:
-    example_json = {
-        "model": "Avanza",
-        "year": 2018,
-        "transmission": "Automatic",
-        "mileage": 50000,
-        "fuelType": "Petrol",
-        "tax": 0,
-        "mpg": 15.0,
-        "engineSize": 1.5,
-    }
-
-
-# =========================================
-# INPUT BUILDER (safe)
-# =========================================
-def build_model_input(raw_row: Dict[str, Any], model_columns: List[str]) -> pd.DataFrame:
-    import numpy as np
-
-    row = pd.Series(0, index=model_columns, dtype=float)
-
-    for k, v in raw_row.items():
-        if k in model_columns:
-            try:
-                row[k] = float(v)
-            except:
-                row[k] = 1.0
-
-    for col in model_columns:
-        if "_" in col:
-            prefix, suffix = col.split("_", 1)
-            if prefix in raw_row:
-                raw_val = str(raw_row[prefix]).lower()
-                if raw_val == suffix.lower():
-                    row[col] = 1.0
-
-    return pd.DataFrame([row])
-
-
-# =========================================
-# CHAT FUNCTION (REVISED FOR AUTOMATIC API KEY & FALLBACK)
-# =========================================
-def chat_reply(system_prompt, messages, api_key, provider="openai"):
-    # --- LOGIKA FALLBACK OTOMATIS JIKA API KEY KOSONG ---
-    if not api_key:
-        last_pred_price = "belum ada"
-        car_features = "tidak diketahui"
-        
-        # Cek langsung st.session_state untuk data prediksi terakhir
-        if "last_pred" in st.session_state:
-            lp = st.session_state["last_pred"]
-            last_pred_price = f"Rp {lp['price']:,.0f}"
-            car_features = ", ".join([f"{k}: {v}" for k, v in lp['input'].items() if k != 'model'])
-            car_features = f"Model {lp['input']['model']}, {car_features}"
-            
-        
-        # Respons otomatis/mock
-        fallback_response = f"🤖 **(Mode Otomatis/Offline)**: Halo! API Key tidak ditemukan di environment.\n\n"
-        fallback_response += f"Prediksi harga mobil Anda adalah **{last_pred_price}**.\n\n"
-        fallback_response += "Saya hanya dapat memberikan respons generik ini. Untuk analisis AI yang sesungguhnya, mohon setel environment variable **`{}_API_KEY`**." .format(provider.upper())
-        return fallback_response
-    # ----------------------------------------------------
-
-    # --- PANGGIL API LLM JIKA API KEY ADA ---
+def chat_reply(system_prompt: str, messages: list, api_key: str, model="gpt-4o-mini", provider="openai"):
+    """
+    Fungsi untuk mengirim percakapan ke OpenAI atau Gemini
+    """
     if provider == "openai":
         import openai
         openai.api_key = api_key
+        conversation = [{"role": "system", "content": system_prompt}] + messages
         resp = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": system_prompt}] + messages,
-            temperature=0.2
+            model=model,
+            messages=conversation,
+            max_tokens=600,
+            temperature=0.2,
         )
-        return resp.choices[0].message["content"]
+        return resp.choices[0].message["content"].strip()
 
-    else:
+    elif provider == "gemini":
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        
-        user_message_content = messages[0]["content"] if messages else ""
-        prompt = f"{system_prompt}\n\nUser: {user_message_content}"
-        
-        return genai.GenerativeModel("models/gemini-2.5-flash").generate_content(prompt).text
+        prompt_text = system_prompt + "\n\n"
+        for m in messages:
+            role = m["role"]
+            content = m["content"]
+            prompt_text += f"{role.upper()}: {content}\n"
+        model_gemini = genai.GenerativeModel("models/gemini-2.5-flash")
+        response = model_gemini.generate_content(prompt_text)
+        return response.text.strip()
 
+    else:
+        raise ValueError("Provider tidak dikenali. Gunakan 'openai' atau 'gemini'.")
 
 # =========================================
-# STREAMLIT UI
+# FUNGSI MODEL
 # =========================================
-st.set_page_config(page_title="Prediksi Harga Mobil – Serly", layout="wide")
-st.title("🚗 Prediksi Harga Mobil – Serly (Model HuggingFace)")
+@st.cache_resource
+def load_model(path: str):
+    return joblib.load(path)
 
-# ------------- SIDEBAR & API KEY SETUP -------------
-st.sidebar.header("⚙ Pengaturan")
-provider = st.sidebar.selectbox("Provider AI", ["openai", "gemini"])
+# =========================================
+# KONFIGURASI STREAMLIT
+# =========================================
+st.set_page_config(page_title="Prediksi Harga Mobil + Chat AI", layout="wide")
+st.title("🚗 Prediksi Harga Mobil & Chat AI")
 
-# ✅ PERUBAHAN: Dapatkan API Key secara OTOMATIS dari Environment Variable
-api_key = os.environ.get("OPENAI_API_KEY" if provider == "openai" else "GEMINI_API_KEY", "")
+# Sidebar
+st.sidebar.header("⚙ Konfigurasi")
+model_path = st.sidebar.text_input("Path ke model (.pkl)", value="model.pkl")
+example_json_path = st.sidebar.text_input("Path contoh fitur (example_features.json)", value="example_features.json")
 
-# Tampilkan status koneksi di sidebar
-if api_key:
-    st.sidebar.success(f"✅ API Key ({provider.upper()}) terdeteksi.")
+openai_key_env = st.sidebar.text_input("Masukkan API Key (opsional)", value="", type="password")
+ai_provider = st.sidebar.selectbox("Pilih provider AI", ["openai", "gemini"], index=0)
+
+# ✅ Perbaikan bagian ENV KEY
+if ai_provider == "gemini":
+    use_env_key = st.sidebar.checkbox("Gunakan dari ENV var GEMINI_API_KEY jika kosong", value=True)
 else:
-    st.sidebar.warning(f"⚠️ API Key ({provider.upper()}) tidak ditemukan. Chat AI berjalan dalam Mode Otomatis.")
+    use_env_key = st.sidebar.checkbox("Gunakan dari ENV var OPENAI_API_KEY jika kosong", value=True)
 
-# ------------- LOAD MODEL -------------
+if use_env_key and not openai_key_env:
+    if ai_provider == "gemini":
+        openai_key_env = os.environ.get("GEMINI_API_KEY", "")
+    else:
+        openai_key_env = os.environ.get("OPENAI_API_KEY", "")
+
+# Debug opsional: tampilkan apakah key terbaca
+# st.sidebar.write("DEBUG KEY:", bool(openai_key_env))
+
+# =========================================
+# LOAD MODEL & SCHEMA
+# =========================================
+example_schema = {}
 try:
-    model = load_model_from_hf(HF_MODEL_URL)
+    with open(example_json_path, "r") as f:
+        example_schema = json.load(f)
 except Exception as e:
-    st.error(f"❌ Model gagal dimuat: {e}")
-    st.stop()
+    st.sidebar.warning(f"Gagal load example_features.json: {e}. Gunakan default.")
+    example_schema = {
+        "model": "Aygo",
+        "year": 2017,
+        "transmission": "Manual",
+        "mileage": 11730,
+        "fuelType": "Petrol",
+        "tax": 0,
+        "mpg": 68.9,
+        "engineSize": 1.0
+    }
+
+model_url_or_path = st.sidebar.text_input(
+    "Masukkan URL atau path lokal ke model (.pkl)",
+    value="https://drive.google.com/uc?id=19QQFqpiuVefqJCyAF68uwBH59QpmM8GM"
+)
+
+model = load_model(model_url_or_path)
 
 
 # =========================================
-# INPUT FORM
+# LAYOUT UTAMA
 # =========================================
-left, right = st.columns([1.2, 1])
+left, right = st.columns([1.2, 1.0])
 
+# =========================================
+# KIRI: INPUT FITUR & PREDIKSI
+# =========================================
 with left:
-    st.subheader("📋 Input Fitur Mobil")
+    st.subheader("📊 Input Fitur Mobil")
 
-    with st.form("form_input"):
-        model_name = st.text_input("Model", example_json["model"])
-        year = st.number_input("Tahun", 1990, 2025, example_json["year"])
-        transmission = st.selectbox("Transmisi", ["Manual", "Automatic"], index=0)
-        mileage = st.number_input("Jarak Tempuh (km)", 0, 500000, example_json["mileage"])
-        fuel = st.selectbox("Bahan Bakar", ["Petrol", "Diesel"], index=0)
-        tax = st.number_input("Pajak", 0, 100000, example_json["tax"])
-        mpg = st.number_input("MPG", 0.0, 999.0, example_json["mpg"])
-        engine = st.number_input("Engine Size", 0.1, 10.0, example_json["engineSize"])
+    with st.form("input_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            model_name = st.text_input("Model", value=example_schema.get("model", "Aygo"))
+            year = st.number_input("Tahun", min_value=1990, max_value=2025, value=int(example_schema.get("year", 2017)))
+            transmission = st.selectbox("Transmisi", ["Manual", "Automatic", "Semi-Auto"], index=0)
+            fuel_type = st.selectbox("Jenis Bahan Bakar", ["Petrol", "Diesel", "Hybrid", "Electric"], index=0)
+        with col2:
+            mileage = st.number_input("Jarak Tempuh (Mileage)", min_value=0, value=int(example_schema.get("mileage", 10000)))
+            tax = st.number_input("Pajak (£)", min_value=0, value=int(example_schema.get("tax", 0)))
+            mpg = st.number_input("MPG (Miles per Gallon)", min_value=0.0, value=float(example_schema.get("mpg", 60.0)))
+            engine_size = st.number_input("Ukuran Mesin (Engine Size)", min_value=0.0, value=float(example_schema.get("engineSize", 1.0)))
 
-        submit = st.form_submit_button("🚗 Prediksi Harga")
+        submitted = st.form_submit_button("🚗 Prediksi Harga Mobil")
 
-    if submit:
-        raw = {
+    if submitted:
+        input_dict = {
             "model": model_name,
             "year": year,
             "transmission": transmission,
             "mileage": mileage,
-            "fuelType": fuel,
+            "fuelType": fuel_type,
             "tax": tax,
             "mpg": mpg,
-            "engineSize": engine,
+            "engineSize": engine_size
         }
 
-        # FIX: jika columns.json tidak ada → pakai raw DataFrame
-        if columns_json:
-            X = build_model_input(raw, columns_json)
-        else:
-            X = pd.DataFrame([raw])
+        X_df = pd.DataFrame([input_dict])
 
         try:
-            pred = model.predict(X)[0]
-            st.success(f"💰 Prediksi Harga Mobil: **Rp {pred:,.0f}**")
-            # Simpan hasil prediksi dan input ke session state
-            st.session_state["last_pred"] = {"price": pred, "input": raw}
+            pred = model.predict(X_df)
+            price = float(pred[0])
+            st.success(f"💰 Prediksi harga mobil: *£{price:,.2f}*")
+            st.session_state["last_prediction"] = {"price": price, "input": input_dict}
         except Exception as e:
-            st.error(f"❌ Error prediksi: {e}")
+            st.error(f"Gagal melakukan prediksi: {e}")
+
+        # Tombol Analisis Otomatis
+        if openai_key_env and st.button("🤖 Analisis Otomatis dengan AI"):
+            system_prompt = (
+                f"Kamu adalah asisten AI yang menjelaskan hasil prediksi harga mobil.\n"
+                f"Model memprediksi harga £{price:,.2f} untuk mobil dengan fitur: {json.dumps(input_dict, ensure_ascii=False)}."
+            )
+            try:
+                ai_reply = chat_reply(system_prompt, [], openai_key_env, provider=ai_provider)
+                st.info(ai_reply)
+            except Exception as e:
+                st.error(f"Gagal menghubungi AI: {e}")
+        elif not openai_key_env:
+            st.warning("Masukkan API Key di sidebar atau file .env untuk menggunakan fitur AI otomatis.")
+
+    if st.checkbox("📋 Tampilkan data input"):
+        st.dataframe(pd.DataFrame([{
+            "model": model_name,
+            "year": year,
+            "transmission": transmission,
+            "mileage": mileage,
+            "fuelType": fuel_type,
+            "tax": tax,
+            "mpg": mpg,
+            "engineSize": engine_size
+        }]))
+
+
+
 
 
 # =========================================
-# CHAT AREA
+# KANAN: CHAT AI
 # =========================================
 with right:
-    st.subheader("💬 Chat AI")
-
+    st.subheader("Chat dengan AI")
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # Tampilkan Riwayat Chat
     for role, text in st.session_state.chat_history:
-        st.markdown(f"**{role.upper()}:** {text}")
-
-    user_text = st.text_area("Tulis pesan...")
-
-    if st.button("Kirim"):
-        if not user_text:
-            st.warning("Mohon tulis pesan Anda terlebih dahulu.")
+        if role == "user":
+            st.markdown(f"*Kamu:* {text}")
         else:
-            st.session_state.chat_history.append(("user", user_text))
+            st.markdown(f"*AI:* {text}")
 
-            system_prompt = "Kamu adalah AI yang menjelaskan prediksi mobil."
-            
-            # Tambahkan konteks prediksi ke system_prompt HANYA jika ada prediksi terakhir (untuk LLM asli)
-            if "last_pred" in st.session_state and api_key:
-                lp = st.session_state["last_pred"]
-                system_prompt += f"\nPrediksi terakhir: Rp {lp['price']:,.0f}. Fitur: {lp['input']}" 
+    user_input = st.text_area("Ketik pertanyaan di sini", height=120)
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        ask_btn = st.button("Kirim ke AI")
+    with col2:
+        clear_btn = st.button("Hapus chat")
 
-            with st.spinner("🤖 AI sedang berpikir..."):
-                # chat_reply akan otomatis memilih mode (API atau Fallback)
-                reply = chat_reply(system_prompt, [{"role": "user", "content": user_text}], api_key, provider)
-            
-            st.session_state.chat_history.append(("ai", reply))
-            
-            # ✅ FIX: Ganti st.experimental_rerun() dengan st.rerun()
-            st.rerun()
+    if clear_btn:
+        st.session_state.chat_history = []
+        st.rerun()
 
+    if ask_btn and user_input.strip():
+        st.session_state.chat_history.append(("user", user_input))
+        system_prompt = (
+            "Kamu adalah asisten AI yang membantu menjelaskan hasil prediksi harga mobil. "
+            "Jawabanmu harus singkat, jelas, dan sesuai konteks prediksi."
+        )
+
+        last_pred = st.session_state.get("last_prediction", None)
+        if last_pred:
+            system_prompt += (
+                f"\nTerakhir model memprediksi harga £{last_pred['price']:,.2f} "
+                f"untuk mobil dengan fitur {json.dumps(last_pred['input'], ensure_ascii=False)}."
+            )
+
+        messages = [{"role": "user" if r == "user" else "assistant", "content": t} for r, t in st.session_state.chat_history[-10:]]
+
+        if not openai_key_env:
+            st.error("❌ API key belum diatur.")
+        else:
+            try:
+                ai_reply = chat_reply(system_prompt, messages, openai_key_env, provider=ai_provider)
+                st.session_state.chat_history.append(("assistant", ai_reply))
+                st.rerun()
+            except Exception as e:
+                st.error(f"Gagal menghubungi AI: {e}")
 
 # =========================================
 # FOOTER
 # =========================================
 st.markdown("---")
-st.caption("Aplikasi Prediksi Harga Mobil – Serly ✅ Stabil dan Fungsional")
+st.markdown(
+    """
+    *Panduan:*
+    - Simpan model terlatih sebagai model.pkl (gunakan joblib.dump(model, "model.pkl")).
+    - Simpan contoh fitur sebagai example_features.json.
+    - Jalankan aplikasi dengan streamlit run app.py.
+    - Pilih provider AI di sidebar (OpenAI atau Gemini) dan masukkan API Key.
+    - Kamu juga bisa menyimpan key di file .env:
+      
+      GEMINI_API_KEY=your_key
+      OPENAI_API_KEY=your_key
+      
+    """
+)
