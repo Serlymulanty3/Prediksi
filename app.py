@@ -98,12 +98,12 @@ except Exception as e:
         "engineSize": 1.0
     }
 
-model_url_or_path = st.sidebar.text_input(
-    "Masukkan URL atau path lokal ke model (.pkl)",
-    value="https://drive.google.com/uc?id=19QQFqpiuVefqJCyAF68uwBH59QpmM8GM"
-)
-
-model = load_model(model_url_or_path)
+try:
+    model = joblib.load("model.pkl")
+except Exception as e:
+    st.error(f"Gagal memuat model: {e}")
+    st.info("Model kemungkinan dibuat dengan versi scikit-learn berbeda atau tidak lengkap.")
+    model = None
 
 
 # =========================================
