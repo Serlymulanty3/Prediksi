@@ -12,7 +12,7 @@ from typing import List, Dict, Any
 import sklearn.compose._column_transformer 
 
 # =========================================
-# HUGGINGFACE FILE LINKS
+# HUGGINGFACE FILE LINKS – Ranzzz/prediksi
 # =========================================
 HF_MODEL_URL = "https://huggingface.co/Ranzzz/prediksi/resolve/main/model.pkl"
 
